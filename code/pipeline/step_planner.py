@@ -58,8 +58,10 @@ def plan(
                 r.system_id, r.resource_id, r.evidence_file_id
             ))
 
-        # Security audit PRESENT (always retain)
+        # Security audit PRESENT (always retain); only cite evidence if file was eligible
         for sec in security_resources:
+            if not sec.evidence_file_id:
+                continue  # late file — no valid evidence for COMPLETE
             verify_steps.append((
                 "VERIFY_RECORD_PRESENT", "PRESENT",
                 sec.system_id, sec.resource_id, sec.evidence_file_id

@@ -419,16 +419,20 @@ def _extract_identifiers(row: dict) -> list[str]:
     """Extract email-like, user_id-like, and hash-like values from a row."""
     ids = []
     hash_fields = {"email_hash", "correlation_key"}
-    for k, v in row.items():
-        if not v or not isinstance(v, str):
-            continue
-        v = v.strip()
-        if _EMAIL_RE.match(v):
-            ids.append(v.lower())
-        elif _USER_RE.match(v):
-            ids.append(v)
-        elif k in hash_fields and _HASH_RE.match(v):
-            ids.append(v)
+    def _scan(d: dict) -> None:
+        for k, v in d.items():
+            if v and isinstance(v, dict):
+                _scan(v)  # recurse one level for nested dicts (e.g. document{email:...})
+            if not v or not isinstance(v, str):
+                continue
+            v = v.strip()
+            if _EMAIL_RE.match(v):
+                ids.append(v.lower())
+            elif _USER_RE.match(v):
+                ids.append(v)
+            elif k in hash_fields and _HASH_RE.match(v):
+                ids.append(v)
+    _scan(row)
     return ids
 
 
@@ -846,6 +850,10 @@ def _parse_log(file_path: Path, file_id: str, captured_at: datetime) -> list[Evi
             row_count = kv.get("rows", "0")
             http = kv.get("http_status", "")
             state = "ABSENT" if row_count == "0" or http == "404" else "PRESENT"
+            # For absent lookups, the email is the query key, not the resource owner.
+            # Remove it to prevent false identity matches on resources that don't contain user data.
+            if state == "ABSENT":
+                kv.pop("email", None)
 
         elif event == "index_query_completed":
             result = kv.get("result", "miss")
@@ -1183,17 +1191,34 @@ class EvidenceIndexer:
         if not self._built:
             raise RuntimeError("build() not called")
 
+        # Confident account_id (Rules 1+2 only — no naming convention).
+        # Used for a second matching pass so records linked only via account_id are found.
+        confident_account_id = self._resolve_account_id(identity, confident_only=True)
+
+        seen = set()  # (file_id, resource_id, system_id) — deduplication key
         result = []
         for rec in self._all_records:
-            # File must have been available at audit_at (file-level check)
             file_cat = self._file_captured_at.get(rec.file_id, datetime.min.replace(tzinfo=timezone.utc))
-            if file_cat > audit_at:
-                continue
-            # Per-event timestamp must also be at or before audit_at
-            if rec.captured_at > audit_at:
-                continue
-            if _record_matches_identity(rec, identity):
-                result.append((rec.file_id, rec))
+            if rec.data_category == "SECURITY_AUDIT_LOG":
+                # Security audit records are immutable historical facts; they may only appear
+                # in a snapshot captured after audit_at but the event itself occurred earlier.
+                # Include from any file, mark late files with "" so COMPLETE VERIFY doesn't cite them.
+                emit_file_id = rec.file_id if file_cat <= audit_at else ""
+            else:
+                # Normal filter: both file-level and per-event must be at or before audit_at
+                if file_cat > audit_at:
+                    continue
+                if rec.captured_at > audit_at:
+                    continue
+                emit_file_id = rec.file_id
+            matched = _record_matches_identity(rec, identity)
+            if not matched and confident_account_id:
+                matched = _record_references_account(rec, confident_account_id)
+            if matched:
+                key = (rec.file_id, rec.resource_id, rec.system_id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append((emit_file_id, rec))
 
         # If no account_service record found, resolve via lookup tables
         if not any(r.system_id == "account_service" for _, r in result):
@@ -1216,8 +1241,12 @@ class EvidenceIndexer:
             raise RuntimeError("build() not called")
         return self._resolve_account_id(identity)
 
-    def _resolve_account_id(self, identity: UserIdentity) -> Optional[str]:
-        """Find account_id for identity via lookup tables, then naming convention fallback."""
+    def _resolve_account_id(self, identity: UserIdentity, confident_only: bool = False) -> Optional[str]:
+        """Find account_id for identity via lookup tables, then naming convention fallback.
+
+        When confident_only=True, skip the naming-convention Rule 3 — the returned ID
+        is then guaranteed to be grounded in evidence, safe for broadened identity matching.
+        """
         # Rule 1: snapshot bundle customer_reference (any timestamp)
         aid = self._account_by_uid.get(identity.user_id)
         if aid:
@@ -1227,6 +1256,8 @@ class EvidenceIndexer:
             aid = self._account_by_email.get(email.lower())
             if aid:
                 return aid
+        if confident_only:
+            return None
         # Rule 3 (last resort): user_NNN → account_NNN naming convention.
         # This is only correct for early users whose account_id happens to match
         # the zero-padded user_id suffix. No evidence supports this for other users.
@@ -1268,6 +1299,17 @@ class EvidenceIndexer:
             if file_cat <= audit_at and r.captured_at <= audit_at:
                 result.append(r)
         return result
+
+
+def _record_references_account(rec: EvidenceRecord, account_id: str) -> bool:
+    """True if any standard raw field in the record equals account_id."""
+    for field in ("customer_reference", "subject_reference", "account_id",
+                  "source_account", "owner_account"):
+        val = str(rec.raw_fields.get(field, "")).strip()
+        if val and val == account_id:
+            return True
+    # Also check the pre-built _identifiers list (in case extract_identifiers was extended)
+    return account_id in rec.raw_fields.get("_identifiers", [])
 
 
 def _record_matches_identity(rec: EvidenceRecord, identity: UserIdentity) -> bool:
