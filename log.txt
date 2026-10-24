@@ -385,3 +385,24 @@ branch=my-solution
 repo_root=C:\Users\Siddharth\Desktop\hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+## 2026-10-24T20:10:56Z Validate output.csv and fix evidence timing violations
+
+User Prompt (verbatim, secrets redacted):
+[Session continuation] Resume validation of output.csv. Fix evidence captured AFTER audit_at violations.
+
+Agent Response Summary:
+Ran validation on output.csv. Found 67 evidence timing violations: log records with file-level captured_at > audit_at were cited because per-event timestamps were <= audit_at. Fixed by adding _file_captured_at dict to EvidenceIndexer and filtering by both file-level and per-event captured_at. Deleted .evidence_cache, regenerated output.csv, re-ran validation: ALL CHECKS PASSED.
+
+Actions:
+* code/pipeline/evidence_indexer.py edited -- dual captured_at filter (file-level + per-event)
+* .evidence_cache/ deleted -- forced fresh parse
+* output.csv regenerated -- 518 rows, COMPLETE=226 INCOMPLETE=283 NOT_APPLICABLE=9
+
+Context:
+tool=Claude Code
+model=claude-sonnet-4-6
+branch=my-solution
+repo_root=C:/Users/Siddharth/Desktop/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

@@ -1068,6 +1068,8 @@ class EvidenceIndexer:
         self._account_by_email: dict[str, str] = {}
         # file_id → (captured_at, {user_id: resource_id}), for fallback citation only
         self._account_sql_uid_maps: dict[str, tuple] = {}
+        # file_id → file-level captured_at (from evidence_files.csv)
+        self._file_captured_at: dict[str, datetime] = {}
         self._built = False
 
     def build(self, evidence_files_manifest: list[dict]) -> None:
@@ -1087,6 +1089,8 @@ class EvidenceIndexer:
 
             if not file_path.exists():
                 continue
+
+            self._file_captured_at[file_id] = captured_at
 
             # Check disk cache
             file_sha = _sha256_file(file_path)
@@ -1181,6 +1185,11 @@ class EvidenceIndexer:
 
         result = []
         for rec in self._all_records:
+            # File must have been available at audit_at (file-level check)
+            file_cat = self._file_captured_at.get(rec.file_id, datetime.min.replace(tzinfo=timezone.utc))
+            if file_cat > audit_at:
+                continue
+            # Per-event timestamp must also be at or before audit_at
             if rec.captured_at > audit_at:
                 continue
             if _record_matches_identity(rec, identity):
@@ -1253,7 +1262,12 @@ class EvidenceIndexer:
         self, resource_id: str, audit_at: datetime
     ) -> list[EvidenceRecord]:
         recs = self._by_resource_id.get(resource_id, [])
-        return [r for r in recs if r.captured_at <= audit_at]
+        result = []
+        for r in recs:
+            file_cat = self._file_captured_at.get(r.file_id, datetime.min.replace(tzinfo=timezone.utc))
+            if file_cat <= audit_at and r.captured_at <= audit_at:
+                result.append(r)
+        return result
 
 
 def _record_matches_identity(rec: EvidenceRecord, identity: UserIdentity) -> bool:
