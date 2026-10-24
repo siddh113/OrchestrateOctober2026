@@ -20,7 +20,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DATASET = _REPO_ROOT / "dataset"
 
 from pipeline.identity_resolver import IdentityResolver
-from pipeline.intent_classifier import classify
+from pipeline.intent_classifier import classify, fast_classify
 from pipeline.activity_scanner import ActivityScanner
 from pipeline.evidence_indexer import EvidenceIndexer
 from pipeline.state_reconstructor import StateReconstructor
@@ -52,23 +52,29 @@ def process_case(
     request_text = case["request_text"]
     audit_at = parse_audit_at(case["audit_at"])
 
-    # 1. Keyword intent classification (fast path)
-    intent = classify(request_text)
-    if intent == "NOT_APPLICABLE":
+    # 1. Keyword intent classification (fast path — highest priority signal)
+    fast = fast_classify(request_text)
+    if fast == "NOT_APPLICABLE":
         return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
 
     # 2. Identity resolution
     identity = resolver.resolve(email)
     if identity is None:
-        # Unknown identity — cannot audit; treat as NOT_APPLICABLE
         return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
 
-    # 2b. CLASSIFY_REQUEST signal from system_activity (authoritative, overrides keyword)
-    account_id = indexer.resolve_account_id(identity)
-    if account_id:
-        classify_signal = scanner.get_classify_signal(account_id, audit_at)
-        if classify_signal == "NOT_APPLICABLE":
-            return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
+    # 2b. CLASSIFY_REQUEST is a tiebreaker only when request_text was ambiguous (fast=None).
+    #     It must never override clear deletion wording in request_text.
+    if fast is None:
+        account_id = indexer.resolve_account_id(identity)
+        if account_id:
+            classify_signal = scanner.get_classify_signal(account_id, audit_at)
+            if classify_signal == "NOT_APPLICABLE":
+                return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
+
+    # 2c. Full classify (handles ambiguous cases via LLM if needed)
+    intent = classify(request_text)
+    if intent == "NOT_APPLICABLE":
+        return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
 
     # 3. State reconstruction
     all_states = reconstructor.reconstruct(identity, audit_at)

@@ -11,11 +11,15 @@ _NEGATION_PATTERNS = [
     r"\bleave\s+(?:my\s+|the\s+)?account\b",
     r"\bwithout\s+(?:closing|deleting|removing|erasing)\b",
     r"\bnot\s+(?:close|delete|erase|remov)\b",
+    # Explicit "not a deletion/erasure request" forms
+    r"\bnot\s+asking\s+for\s+(?:deletion|erasure|removal)\b",
+    r"\bnot\s+a\s+request\s+to\s+(?:erase|delete|remove)\b",
+    r"\bnot\s+(?:a\s+)?(?:deletion|erasure|removal)\s+request\b",
 ]
 
 # Fast path keyword patterns (case-insensitive)
 _DELETION_PATTERNS = [
-    r'\bdelete\b', r'\bdelete\s+my\b', r'\bdeleting\b', r'\bdeleted\b',
+    r'\bdelete\b', r'\bdelete\s+my\b', r'\bdeleting\b', r'\bdeleted\b', r'\bdeletion\b',
     r'\berase\b', r'\berase\s+my\b', r'\berasing\b',
     r'\bremove\s+my\b', r'\bremove\s+all\b', r'\bremoving\s+my\b',
     r'\bclose\s+my\s+account\b', r'\bclos(?:e|ing|ed)\s+(?:my|the)\s+account\b',
@@ -90,6 +94,11 @@ def _fast_classify(text: str) -> str | None:
     if has_nap:
         return "NOT_APPLICABLE"
     return None
+
+
+def fast_classify(text: str) -> str | None:
+    """Public: keyword-only classify. Returns DELETION, NOT_APPLICABLE, or None (ambiguous)."""
+    return _fast_classify(text)
 
 
 def classify(request_text: str) -> str:

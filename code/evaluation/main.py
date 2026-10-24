@@ -24,7 +24,7 @@ _DATASET = _REPO_ROOT / "dataset"
 sys.path.insert(0, str(_REPO_ROOT / "code"))
 
 from pipeline.identity_resolver import IdentityResolver
-from pipeline.intent_classifier import classify
+from pipeline.intent_classifier import classify, fast_classify
 from pipeline.activity_scanner import ActivityScanner
 from pipeline.evidence_indexer import EvidenceIndexer
 from pipeline.state_reconstructor import StateReconstructor
@@ -56,8 +56,8 @@ def run_pipeline_on_samples(
             request_text = case["request_text"]
             audit_at = parse_audit_at(case["audit_at"])
 
-            intent = classify(request_text)
-            if intent == "NOT_APPLICABLE":
+            fast = fast_classify(request_text)
+            if fast == "NOT_APPLICABLE":
                 results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
                 continue
 
@@ -66,12 +66,18 @@ def run_pipeline_on_samples(
                 results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
                 continue
 
-            account_id = indexer.resolve_account_id(identity)
-            if account_id:
-                sig = scanner.get_classify_signal(account_id, audit_at)
-                if sig == "NOT_APPLICABLE":
-                    results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
-                    continue
+            if fast is None:
+                account_id = indexer.resolve_account_id(identity)
+                if account_id:
+                    sig = scanner.get_classify_signal(account_id, audit_at)
+                    if sig == "NOT_APPLICABLE":
+                        results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
+                        continue
+
+            intent = classify(request_text)
+            if intent == "NOT_APPLICABLE":
+                results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
+                continue
 
             all_states = reconstructor.reconstruct(identity, audit_at)
             decisions = [engine.apply(rs, identity, audit_at) for rs in all_states]
