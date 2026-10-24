@@ -363,3 +363,25 @@ branch=my-solution
 repo_root=C:\Users\Siddharth\Desktop\hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T19:52:42Z] Broaden intent classifier: negation patterns + CLASSIFY_REQUEST without audit_at cutoff
+
+User Prompt (verbatim, secrets redacted):
+Do not accept 0 NOT_APPLICABLE yet. [Investigation + implement broader intent classifier, ignore audit_at for intent, report new counts]
+
+Agent Response Summary:
+Investigation found 8 clearly non-deletion cases (case_533-542) all incorrectly classified as DELETION. Root causes: (1) case_536 'Do not close the account' matched deletion pattern via 'close the account'; (2) case_542 'please don't delete' matched deletion pattern; (3) cases 533,535,537,538,540,541 returned fast=None and fell through to LLM fallback returning DELETION. Fix: added _NEGATION_PATTERNS (highest priority) for 'do not/don't close/delete/erase', 'keep account active', 'leave account', 'without removing'; expanded _NOT_APPLICABLE_PATTERNS for 'download account information', 'portable format', 'copy of invoices', 'misspell', 'replace phone', 'change email', 'reset login', 'can't access', 'continue using', 'leave profile'. Also removed audit_at check from get_classify_signal (intent is not state proof). Result: 9 NOT_APPLICABLE (case_230 via CLASSIFY_REQUEST + 8 via keyword rules). Sample accuracy unchanged at 81.1%, 32/32 status correct. No LLM calls needed.
+
+Actions:
+* code/pipeline/intent_classifier.py — added negation patterns, expanded NOT_APPLICABLE patterns
+* code/pipeline/activity_scanner.py — removed audit_at filter from get_classify_signal
+* output.csv — regenerated (COMPLETE=226, INCOMPLETE=283, NOT_APPLICABLE=9)
+* code.zip — repackaged
+
+Context:
+tool=Claude Code
+model=claude-sonnet-4-6
+branch=my-solution
+repo_root=C:\Users\Siddharth\Desktop\hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

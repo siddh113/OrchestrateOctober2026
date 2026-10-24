@@ -1,6 +1,18 @@
 from __future__ import annotations
 import re
 
+# Explicit negation of deletion — highest priority, always wins over deletion patterns.
+# Catches: "do not close/delete", "don't delete", "keep the account", "leave account in place".
+_NEGATION_PATTERNS = [
+    r"\bdo\s+not\s+(?:close|delete|erase|remov)\b",
+    r"\bdon'?t\s+(?:close|delete|erase|remov)\b",
+    r"\bplease\s+don'?t\s+(?:close|delete|erase|remov)\b",
+    r"\bkeep\s+(?:my\s+|the\s+)?account\s+(?:active|open|as.is|intact)\b",
+    r"\bleave\s+(?:my\s+|the\s+)?account\b",
+    r"\bwithout\s+(?:closing|deleting|removing|erasing)\b",
+    r"\bnot\s+(?:close|delete|erase|remov)\b",
+]
+
 # Fast path keyword patterns (case-insensitive)
 _DELETION_PATTERNS = [
     r'\bdelete\b', r'\bdelete\s+my\b', r'\bdeleting\b', r'\bdeleted\b',
@@ -35,25 +47,46 @@ _DELETION_PATTERNS = [
 ]
 
 _NOT_APPLICABLE_PATTERNS = [
+    # Data access / export
     r'\bdata\s+access\s+request\b', r'\baccess\s+my\s+data\b', r'\bview\s+my\s+data\b',
     r'\bcopy\s+of\s+my\s+data\b', r'\bexport\s+my\s+data\b', r'\bdownload\s+my\s+data\b',
-    r'\bopt.out\b', r'\bunsubscribe\b', r'\bstop\s+marketing\b', r'\bstop\s+emails\b',
-    r'\bcorrect\b.*\bdata\b', r'\bupdate\s+my\s+(?:data|information|details)\b',
-    r'\bcorrection\s+request\b', r'\bdata\s+portability\b',
+    r'\bdownload\s+(?:my\s+)?account\s+information\b',
+    r'\bportable\s+format\b', r'\bdata\s+portability\b',
+    r'\bcopy\s+of.*(?:invoices?|receipts?|records?|information)\b',
+    r'\bleave\s+(?:my\s+|the\s+)?(?:account|profile|data|purchase)\b',
     r'\bwhat\s+data\b', r'\bwhat\s+information\b', r'\bwhat\s+do\s+you\s+have\b',
+    # Opt-out / marketing
+    r'\bopt.out\b', r'\bunsubscribe\b', r'\bstop\s+marketing\b', r'\bstop\s+emails\b',
+    r'\bremove\s+(?:me\s+)?from\s+(?:marketing|mailing|email)\s+list\b',
+    r'\bmarketing\s+(?:list|email|message)s?\s+only\b',
+    # Correction / update
+    r'\bcorrect\b.*\bdata\b', r'\bupdate\s+my\s+(?:data|information|details|profile)\b',
+    r'\bcorrection\s+request\b',
+    r'\bmisspell\b', r'\bincorrect\b.*\bname\b', r'\bwrong\b.*\bname\b',
+    r'\bupdate\s+(?:my\s+)?(?:phone|mobile|number|address|email)\b',
+    r'\bchange\s+(?:my\s+)?(?:phone|mobile|number|address|email)\b',
+    r'\breplace\s+(?:my\s+)?(?:phone|mobile|number)\b',
+    r'\bcontinue\s+using\s+(?:my\s+|the\s+)?(?:account|service)\b',
+    # Technical support / access issues
     r'\bsupport\s+ticket\b', r'\btechnical\s+issue\b',
+    r'\breset\s+(?:my\s+)?(?:login|password|access)\b',
+    r"\bcan'?t\s+access\b",
 ]
 
+_NEG_RE = re.compile("|".join(_NEGATION_PATTERNS), re.IGNORECASE)
 _DEL_RE = re.compile("|".join(_DELETION_PATTERNS), re.IGNORECASE)
 _NAP_RE = re.compile("|".join(_NOT_APPLICABLE_PATTERNS), re.IGNORECASE)
 
 
 def _fast_classify(text: str) -> str | None:
-    """Returns DELETION, NOT_APPLICABLE, or None (ambiguous)."""
+    """Returns DELETION, NOT_APPLICABLE, or None (ambiguous — needs LLM)."""
+    # Negation overrides deletion patterns (e.g. "do not close", "don't delete")
+    if _NEG_RE.search(text):
+        return "NOT_APPLICABLE"
     has_del = bool(_DEL_RE.search(text))
     has_nap = bool(_NAP_RE.search(text))
     if has_del:
-        return "DELETION"  # deletion wins if both match
+        return "DELETION"  # deletion wins over ordinary NOT_APPLICABLE
     if has_nap:
         return "NOT_APPLICABLE"
     return None
@@ -64,7 +97,7 @@ def classify(request_text: str) -> str:
     fast = _fast_classify(request_text)
     if fast is not None:
         return fast
-    # LLM fallback for ambiguous cases
+    # LLM fallback for genuinely ambiguous cases
     try:
         from pipeline.llm_client import classify_intent
         return classify_intent(request_text)

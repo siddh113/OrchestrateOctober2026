@@ -138,11 +138,15 @@ class ActivityScanner:
         return result
 
     def get_classify_signal(self, account_id: str, audit_at: datetime) -> Optional[str]:
-        """Return 'NOT_APPLICABLE' if account had a non-deletion CLASSIFY_REQUEST at or before audit_at."""
+        """Return 'NOT_APPLICABLE' if account had a non-deletion CLASSIFY_REQUEST.
+
+        audit_at is not checked here: intent classification is not state proof,
+        so a CLASSIFY_REQUEST recorded after audit_at is still valid intent evidence.
+        """
         self._load()
         entries = self._classify_by_account.get(account_id, [])
-        for et, is_deletion in entries:
-            if et <= audit_at and not is_deletion:
+        for _et, is_deletion in entries:
+            if not is_deletion:
                 return "NOT_APPLICABLE"
         return None
 
