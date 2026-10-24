@@ -30,4 +30,6 @@ Thumbs.db
 .vscode/
 *.swp
 
+.claude/
+
 # Do NOT ignore log.txt — required submission artifact

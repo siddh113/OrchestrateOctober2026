@@ -1,5 +1,6 @@
 from __future__ import annotations
 import csv
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -81,6 +82,11 @@ class IdentityResolver:
         for p in self._historical_phones.get(uid, []):
             all_phones.add(p)
 
+        all_email_hashes: set[str] = set()
+        for e in all_emails:
+            if e:
+                all_email_hashes.add(hashlib.sha256(e.encode()).hexdigest())
+
         return UserIdentity(
             user_id=uid,
             current_email=current_email,
@@ -88,6 +94,7 @@ class IdentityResolver:
             all_phones=all_phones,
             name=name,
             email_hash=email_hash,
+            all_email_hashes=all_email_hashes,
         )
 
     def get_by_user_id(self, user_id: str) -> Optional[UserIdentity]:

@@ -39,6 +39,8 @@ class ActivityScanner:
         self._link_by_email: dict[str, list[dict]] = defaultdict(list)
         self._link_by_user_id: dict[str, list[dict]] = defaultdict(list)
         self._by_resource_id: dict[str, list[dict]] = defaultdict(list)
+        # account_id → list of (event_time, is_deletion bool)
+        self._classify_by_account: dict[str, list[tuple[datetime, bool]]] = defaultdict(list)
         self._loaded = False
 
     def _load(self) -> None:
@@ -87,6 +89,19 @@ class ActivityScanner:
                     self._link_by_email[email].append(entry)
                     self._link_by_user_id[user_id].append(entry)
 
+            elif row.get("event_type") == "CLASSIFY_REQUEST":
+                account_id = (row.get("resource_id") or "").strip()
+                details = row.get("details", "").lower()
+                is_deletion = "non-deletion" not in details
+                try:
+                    et = datetime.fromisoformat(
+                        row["event_time"].replace("Z", "+00:00")
+                    ).replace(tzinfo=timezone.utc)
+                except Exception:
+                    et = datetime.min.replace(tzinfo=timezone.utc)
+                if account_id:
+                    self._classify_by_account[account_id].append((et, is_deletion))
+
         self._loaded = True
 
     def get_linked_resources(self, identity: UserIdentity) -> list[dict]:
@@ -121,6 +136,15 @@ class ActivityScanner:
             if event_time <= audit_at:
                 result.append(row)
         return result
+
+    def get_classify_signal(self, account_id: str, audit_at: datetime) -> Optional[str]:
+        """Return 'NOT_APPLICABLE' if account had a non-deletion CLASSIFY_REQUEST at or before audit_at."""
+        self._load()
+        entries = self._classify_by_account.get(account_id, [])
+        for et, is_deletion in entries:
+            if et <= audit_at and not is_deletion:
+                return "NOT_APPLICABLE"
+        return None
 
     def get_all_rows_for_identity(self, identity: UserIdentity, audit_at: datetime) -> list[dict]:
         """Return all activity rows at or before audit_at that reference this identity."""

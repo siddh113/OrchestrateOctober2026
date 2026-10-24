@@ -8,10 +8,11 @@ from typing import Optional
 class UserIdentity:
     user_id: str
     current_email: str
-    all_emails: set = field(default_factory=set)   # lowercase current + historical
-    all_phones: set = field(default_factory=set)   # current + historical
+    all_emails: set = field(default_factory=set)        # lowercase current + historical
+    all_phones: set = field(default_factory=set)        # current + historical
     name: str = ""
     email_hash: str = ""
+    all_email_hashes: set = field(default_factory=set)  # SHA-256 of all emails
 
 
 @dataclass
