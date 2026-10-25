@@ -147,13 +147,14 @@ pairing); if none match, it falls back to the naming convention
 
 | | Data-derived | Naming-convention | Total |
 |---|---|---|---|
-| All account_service steps | 246 | 234 | 480 |
-| Evidence-backed (account in reconstructed state) | 268 | — | 268 |
-| **Synthesized steps (no evidence link)** | **15** | **197** | **212** |
+| Evidence-backed (account in reconstructed state) | 231 | 37 | 268 |
+| Synthesized (no evidence link) | 15 | 197 | 212 |
+| **Total** | **246** | **234** | **480** |
 
-197 of the 212 synthesized steps carry a guessed resource_id. Where the actual account_service ID
-differs from the naming-convention value (e.g., `account_050` vs the real `account_5037`), the
-synthesized step references a non-existent resource.
+48.8% of all account_service steps use the naming-convention fallback (234/480). 92.9% of
+synthesized steps carry a guessed resource_id (197/212). Where the actual account_service ID
+differs from `account_NNN` (e.g., real `account_5037` vs guessed `account_050`), the synthesized
+step references a non-existent resource.
 
 ### 3. File-Level `captured_at` Interpretation
 
@@ -209,11 +210,15 @@ Final status distribution: **COMPLETE 206 / INCOMPLETE 302 / NOT_APPLICABLE 10**
 
 ## Packaging
 
+HackerRank requires zipping the `code/` directory only (exclude virtualenvs, node_modules, build
+artifacts, `dataset/`, and the `data/` corpus). `README.md` is kept inside `code/` as
+`code/README.md` so it is included in the zip.
+
 To rebuild `code.zip` from the repository root:
 
 ```bash
-# macOS / Linux
-zip -r code.zip README.md code \
+# macOS / Linux (Git Bash on Windows)
+zip -r code.zip code \
   --exclude "*/__pycache__/*" \
   --exclude "*/.evidence_cache/*" \
   --exclude "*/.llm_cache/*" \
@@ -223,14 +228,10 @@ zip -r code.zip README.md code \
   --exclude "*/venv/*" \
   --exclude "*/.env" \
   --exclude "*/.env.*" \
-  --exclude "*/.git/*" \
-  --exclude "*/.claude/*"
+  --exclude "*/node_modules/*" \
+  --exclude "*/dataset/*" \
+  --exclude "*/data/*"
 ```
 
-```powershell
-# Windows PowerShell (run from repo root)
-$exclude = @('__pycache__', '.evidence_cache', '.llm_cache', '.pytest_cache', '.venv', 'venv', '.git', '.claude')
-# Use 7-Zip or the zip command via Git Bash for reliable exclusion
-```
-
-Do **not** include `dataset/`, virtual environments, caches, `__pycache__`, secrets, or nested archives.
+Do **not** include `dataset/`, `data/`, virtual environments, `node_modules`, caches,
+`__pycache__`, secrets, build artifacts, or nested archives.

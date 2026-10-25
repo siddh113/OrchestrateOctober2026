@@ -61,19 +61,14 @@ def main() -> None:
     indexer.build(manifest)
     print("Index built.", flush=True)
 
-    # Counters
-    # All account_service steps in output.csv
+    # Counters — 2x2: (evidence-backed vs synthesized) x (data-derived vs naming-convention)
     total_acct_steps = 0
-    total_data_derived = 0
-    total_naming_conv = 0
 
-    # Synthesized steps (INCOMPLETE cases where account_service not in reconstructed states)
-    synth_total = 0
+    backed_data_derived = 0
+    backed_naming_conv = 0
+
     synth_data_derived = 0
     synth_naming_conv = 0
-
-    # Evidence-backed account steps (account in reconstructed states)
-    backed_total = 0
 
     not_applicable = 0
     errors = 0
@@ -132,40 +127,51 @@ def main() -> None:
             step_nc = _naming_convention(identity.user_id)
             step_is_nc = (rid == step_nc)
 
-            if step_is_nc:
-                total_naming_conv += 1
-            else:
-                total_data_derived += 1
-
             # Is this step synthesized?
             if deletion_status == "INCOMPLETE" and not acct_in_states:
-                synth_total += 1
+                # Synthesized: no evidence-backed account_service resource
                 if step_is_nc:
                     synth_naming_conv += 1
                 else:
                     synth_data_derived += 1
             else:
-                backed_total += 1
+                # Evidence-backed: account appeared in reconstructed state
+                if step_is_nc:
+                    backed_naming_conv += 1
+                else:
+                    backed_data_derived += 1
 
         if (i + 1) % 100 == 0:
             print(f"  {i+1}/{len(cases)} cases processed...", flush=True)
 
-    print("\n" + "=" * 60)
-    print("ACCOUNT_SERVICE RESOURCE_ID SPLIT")
-    print("=" * 60)
-    print(f"Total account_service steps in output.csv : {total_acct_steps}")
-    print(f"  Data-derived (evidence-based lookup)    : {total_data_derived}")
-    print(f"  Naming-convention fallback (account_NNN): {total_naming_conv}")
+    backed_total = backed_data_derived + backed_naming_conv
+    synth_total  = synth_data_derived  + synth_naming_conv
+    col_derived  = backed_data_derived + synth_data_derived
+    col_naming   = backed_naming_conv  + synth_naming_conv
+    grand_total  = backed_total + synth_total
+
+    assert grand_total == total_acct_steps, f"Sum mismatch: {grand_total} != {total_acct_steps}"
+
+    guessed_pct_all   = 100 * col_naming  / grand_total if grand_total else 0
+    guessed_pct_synth = 100 * synth_naming_conv / synth_total if synth_total else 0
+
+    print("\n" + "=" * 68)
+    print("ACCOUNT_SERVICE RESOURCE_ID SPLIT (2x2)")
+    print("=" * 68)
+    W = 20
+    print(f"{'':>{W}} {'Data-derived':>14} {'Naming-conv':>12} {'Total':>8}")
+    print("-" * 68)
+    print(f"{'Evidence-backed':>{W}} {backed_data_derived:>14} {backed_naming_conv:>12} {backed_total:>8}")
+    print(f"{'Synthesized':>{W}} {synth_data_derived:>14} {synth_naming_conv:>12} {synth_total:>8}")
+    print("-" * 68)
+    print(f"{'Total':>{W}} {col_derived:>14} {col_naming:>12} {grand_total:>8}")
     print()
-    print(f"Evidence-backed account steps             : {backed_total}")
+    print(f"Naming-convention (guessed) % of all steps : {guessed_pct_all:.1f}%  ({col_naming}/{grand_total})")
+    print(f"Naming-convention (guessed) % of synthesized: {guessed_pct_synth:.1f}%  ({synth_naming_conv}/{synth_total})")
     print()
-    print(f"Synthesized steps (INCOMPLETE, no evidence link): {synth_total}")
-    print(f"  Synthesized + data-derived              : {synth_data_derived}")
-    print(f"  Synthesized + naming-convention         : {synth_naming_conv}")
-    print()
-    print(f"NOT_APPLICABLE cases (skipped)            : {not_applicable}")
+    print(f"NOT_APPLICABLE cases (skipped): {not_applicable}")
     if errors:
-        print(f"Errors                                    : {errors}")
+        print(f"Errors: {errors}")
     print()
     usage = UsageTracker.get().summary()
     if "0 calls" in usage or "No LLM" in usage:

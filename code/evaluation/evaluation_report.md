@@ -127,12 +127,13 @@ DELETE, indicating this record should be treated as a marketing contact record.
 
    | | Data-derived | Naming-convention | Total |
    |---|---|---|---|
-   | All account_service steps in output.csv | 246 | 234 | 480 |
-   | Evidence-backed (account in reconstructed state) | 268 | — | 268 |
-   | **Synthesized steps (no evidence link)** | **15** | **197** | **212** |
+   | Evidence-backed (account in reconstructed state) | 231 | 37 | 268 |
+   | Synthesized (no evidence link) | 15 | 197 | 212 |
+   | **Total** | **246** | **234** | **480** |
 
-   197 of the 212 synthesized steps carry a guessed resource_id (naming-convention fallback). Where
-   the real account ID differs from `account_NNN`, the step references a non-existent resource.
+   48.8% of all account_service steps use naming-convention (guessed). 92.9% of synthesized steps
+   carry a guessed resource_id. Where the real account ID differs from `account_NNN`, the
+   synthesized step references a non-existent resource.
    Fixed 212 validation errors. Field accuracy and status accuracy unchanged.
 
 ## 6. Validation
