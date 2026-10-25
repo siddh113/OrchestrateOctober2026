@@ -85,7 +85,7 @@ def _is_pii_exposed(raw: dict, data_category: str) -> bool:
                 return True
         return False
     if data_category in ("SUPPORT_MESSAGE",):
-        for f in ("requester_email", "requester_phone"):
+        for f in ("requester_email", "requester_phone", "email", "matched_value"):
             v = raw.get(f)
             if v is not None and str(v).strip() not in ("", "null", "None"):
                 return True

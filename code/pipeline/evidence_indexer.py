@@ -583,6 +583,8 @@ def _parse_snapshot_bundle(data: dict, file_id: str, captured_at: datetime) -> l
         "customer_analytics_profiles": ("analytics_platform", "ANALYTICS_PROFILE"),
         "customer_analytics_reports": ("analytics_platform", "ANALYTICS_PROFILE"),
         "support_records": ("support_platform", "SUPPORT_MESSAGE"),
+        "support_conversations": ("support_platform", "SUPPORT_MESSAGE"),
+        "ticket_attachments": ("support_platform", "SUPPORT_ATTACHMENT"),
         "customer_exports": ("export_service", "USER_EXPORT"),
         "connector_subscriptions": ("integration_service", "DATA_FLOW"),
         "backup_restore_entries": ("backup_service", "BACKUP_ARCHIVE"),
@@ -804,6 +806,7 @@ def _parse_log(file_path: Path, file_id: str, captured_at: datetime) -> list[Evi
         "restore_policy_read_completed": ("backup_service", "BACKUP_ARCHIVE"),
         "restore_candidate_evaluated": ("backup_service", "BACKUP_ARCHIVE"),
         "support_ticket_read_completed": ("support_platform", "SUPPORT_MESSAGE"),
+        "message_pii_scan": ("support_platform", "SUPPORT_MESSAGE"),
         "contact_query_completed": ("support_platform", "SUPPORT_ATTACHMENT"),
         "audit_record_read_completed": ("security_service", "SECURITY_AUDIT_LOG"),
         "tombstone_read_completed": ("identity_service", "ACCOUNT_TOMBSTONE"),
@@ -886,6 +889,10 @@ def _parse_log(file_path: Path, file_id: str, captured_at: datetime) -> list[Evi
             eligible = kv.get("eligible", "false")
             deletion_block = kv.get("deletion_block", "true")
             state = "ACTIVE" if (eligible == "true" and deletion_block == "false") else "BLOCKED"
+
+        elif event == "message_pii_scan":
+            # PII scan found an identifier in the support message → still exposed
+            state = "PRESENT"
 
         elif event == "support_ticket_read_completed":
             state = _state_support(kv)
