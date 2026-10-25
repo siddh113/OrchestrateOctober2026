@@ -37,6 +37,7 @@ def plan(
     deletion_status: str,
     security_resources: list[ResourceState],
     user_id: str = "",
+    account_id: str = "",
 ) -> list[Step]:
     """Build ordered steps list for a case.
 
@@ -181,6 +182,13 @@ def plan(
                     "VERIFY_RECORD_ABSENT", "ABSENT",
                     r.system_id, r.resource_id,
                 ))
+        # Fallback: no account_service evidence found — synthesize from resolved account_id.
+        # Every INCOMPLETE case must confirm account deletion. evidence_id="" (no on-time proof).
+        if not seen_acct and account_id:
+            verify_steps.append((
+                "VERIFY_RECORD_ABSENT", "ABSENT",
+                "account_service", account_id,
+            ))
 
         # Security audit PRESENT
         for sec in security_resources:

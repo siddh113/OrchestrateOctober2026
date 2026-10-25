@@ -76,13 +76,16 @@ def process_case(
     if intent == "NOT_APPLICABLE":
         return {"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"}
 
-    # 3. State reconstruction
+    # 3. Account ID (data-derived or naming-convention fallback)
+    account_id = indexer.resolve_account_id(identity) or ""
+
+    # 4. State reconstruction
     all_states = reconstructor.reconstruct(identity, audit_at)
 
-    # 4. Policy application
+    # 5. Policy application
     decisions = [engine.apply(rs, identity, audit_at) for rs in all_states]
 
-    # 5. Split violations vs compliant
+    # 6. Split violations vs compliant
     # Require non-empty evidence_file_id for violations: FINDING steps must cite evidence.
     # Records with empty evidence_file_id have no on-time citation and cannot be reported.
     violations = [d for d in decisions if d.is_violation and d.resource_state.evidence_file_id]
@@ -100,7 +103,7 @@ def process_case(
         deletion_status = "COMPLETE"
 
     # 7. Plan steps
-    steps = plan(violations, compliant, deletion_status, security_resources, identity.user_id)
+    steps = plan(violations, compliant, deletion_status, security_resources, identity.user_id, account_id)
 
     # 8. Serialize
     steps_json = json.dumps([s.to_dict() for s in steps], separators=(",", ":"))
@@ -153,15 +156,17 @@ def main(sample_only: bool = False) -> None:
     # Sort by case_id numerically
     output_rows.sort(key=lambda r: int(r["case_id"].split("_")[1]))
 
-    # Validate
+    # Validate — always print result; exit nonzero if errors remain
+    validation_errors = 0
     if expected_count:
         errs = validate(output_rows, expected_count)
+        validation_errors = len(errs)
         if errs:
-            print(f"\nValidation errors ({len(errs)}):", file=sys.stderr)
-            for e in errs[:20]:
+            print(f"\nValidation errors ({validation_errors}):", file=sys.stderr)
+            for e in errs[:40]:
                 print(f"  {e}", file=sys.stderr)
         else:
-            print("Validation passed.")
+            print(f"Validation passed (0 errors).")
 
     # Write output
     with open(output_path, "w", encoding="utf-8", newline="") as f:
@@ -173,6 +178,9 @@ def main(sample_only: bool = False) -> None:
     if errors:
         print(f"Cases with errors: {errors}", file=sys.stderr)
     print("\n" + UsageTracker.get().summary())
+
+    if validation_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from pipeline.evidence_indexer import EvidenceIndexer
 from pipeline.state_reconstructor import StateReconstructor
 from pipeline.policy_engine import PolicyEngine
 from pipeline.step_planner import plan
+from pipeline.output_validator import validate
 from pipeline.llm_client import UsageTracker
 
 
@@ -66,8 +67,9 @@ def run_pipeline_on_samples(
                 results.append({"case_id": case_id, "deletion_status": "NOT_APPLICABLE", "steps_json": "[]"})
                 continue
 
+            account_id = indexer.resolve_account_id(identity) or ""
+
             if fast is None:
-                account_id = indexer.resolve_account_id(identity)
                 if account_id:
                     sig = scanner.get_classify_signal(account_id, audit_at)
                     if sig == "NOT_APPLICABLE":
@@ -86,7 +88,7 @@ def run_pipeline_on_samples(
             security_resources = [rs for rs in all_states if rs.data_category == "SECURITY_AUDIT_LOG"]
 
             deletion_status = "INCOMPLETE" if violations else "COMPLETE"
-            steps = plan(violations, compliant, deletion_status, security_resources, identity.user_id)
+            steps = plan(violations, compliant, deletion_status, security_resources, identity.user_id, account_id)
             steps_json = json.dumps([s.to_dict() for s in steps], separators=(",", ":"))
             results.append({"case_id": case_id, "deletion_status": deletion_status, "steps_json": steps_json})
 
@@ -237,6 +239,15 @@ def main() -> None:
     actual = run_pipeline_on_samples(cases, resolver, scanner, indexer, reconstructor, engine)
 
     compare(actual, expected)
+
+    # Validate the 32-case output against schema rules
+    errs = validate(actual, expected_count=len(actual))
+    if errs:
+        print(f"\nValidation errors on 32-sample output ({len(errs)}):")
+        for e in errs:
+            print(f"  {e}")
+    else:
+        print(f"\nValidation passed on 32-sample output (0 errors).")
 
     usage = UsageTracker.get().summary()
     if "0 calls" not in usage and "No LLM" not in usage:
