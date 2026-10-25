@@ -130,12 +130,30 @@ rules (snapshot bundle `customer_reference`, SQL search `source_resource_id`, tr
 
 Cases still affected: 03, 09, 17, 18, 21, 22, 23, 25, 28, 29, 30, 31, 32.
 
-### 2. Naming-Convention Fallback
+### 2. Naming-Convention Fallback and Guessed Resource IDs in Synthesized Steps
 
-When no evidence-based account ID lookup succeeds, the pipeline derives
-`account_id = "account_" + user_number.zfill(3)` (e.g., `user_050 → account_050`). This is
-correct for early users but wrong for users with arbitrary assigned account IDs. A code comment
-in `evidence_indexer.py` (`resolve_account_id`) marks this as last-resort only.
+Validator check 10 (`output_validator.py`) requires every INCOMPLETE case to include a
+`VERIFY_RECORD_ABSENT` step on `account_service`. This check was **inferred from sample data**
+(22 of 22 INCOMPLETE sample cases include the step); it is not a quoted rule from the problem
+specification.
+
+When no evidence-backed `account_service` record exists for an INCOMPLETE case, the pipeline
+synthesizes the step using `resolve_account_id()`. That function tries three evidence-based rules
+(snapshot bundle `customer_reference`, SQL `source_resource_id`, trace-log `profile_lookup_completed`
+pairing); if none match, it falls back to the naming convention
+`account_id = "account_" + user_number.zfill(3)` (e.g., `user_050 → account_050`).
+
+**Measured split across all 518 cases** (`code/evaluation/measure_account_ids.py`):
+
+| | Data-derived | Naming-convention | Total |
+|---|---|---|---|
+| All account_service steps | 246 | 234 | 480 |
+| Evidence-backed (account in reconstructed state) | 268 | — | 268 |
+| **Synthesized steps (no evidence link)** | **15** | **197** | **212** |
+
+197 of the 212 synthesized steps carry a guessed resource_id. Where the actual account_service ID
+differs from the naming-convention value (e.g., `account_050` vs the real `account_5037`), the
+synthesized step references a non-existent resource.
 
 ### 3. File-Level `captured_at` Interpretation
 

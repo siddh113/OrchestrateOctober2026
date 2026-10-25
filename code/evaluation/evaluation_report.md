@@ -118,9 +118,22 @@ DELETE, indicating this record should be treated as a marketing contact record.
 9. **INCOMPLETE VERIFY_RECORD_ABSENT on account_service synthesized:** Every INCOMPLETE case now
    emits a `VERIFY_RECORD_ABSENT` step on `account_service`, even when no evidence file directly
    references the account. Resource ID uses data-derived lookup (Rules 1–2) then naming-convention
-   fallback. evidence_id is always `""` for the synthesized step (no on-time proof). This was
-   confirmed by sample_output.csv (22/22 INCOMPLETE cases include this step). Fixed 212 validation
-   errors. Field accuracy and status accuracy unchanged.
+   fallback. evidence_id is always `""` for the synthesized step (no on-time proof).
+
+   Validator check 10 was **inferred from sample data** (22/22 INCOMPLETE sample cases include the
+   step); it is not a quoted rule in the problem specification.
+
+   **Measured split** (run `python -I code/evaluation/measure_account_ids.py` from repo root):
+
+   | | Data-derived | Naming-convention | Total |
+   |---|---|---|---|
+   | All account_service steps in output.csv | 246 | 234 | 480 |
+   | Evidence-backed (account in reconstructed state) | 268 | — | 268 |
+   | **Synthesized steps (no evidence link)** | **15** | **197** | **212** |
+
+   197 of the 212 synthesized steps carry a guessed resource_id (naming-convention fallback). Where
+   the real account ID differs from `account_NNN`, the step references a non-existent resource.
+   Fixed 212 validation errors. Field accuracy and status accuracy unchanged.
 
 ## 6. Validation
 
