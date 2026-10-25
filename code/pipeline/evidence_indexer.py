@@ -28,6 +28,7 @@ _TABLE_META = {
     "customer_search_documents": ("search_service", "SEARCH_INDEX_ENTRY"),
     "search_documents_primary": ("search_service", "SEARCH_INDEX_ENTRY"),
     "customer_analytics_profiles": ("analytics_platform", "ANALYTICS_PROFILE"),
+    "customer_analytics_reports": ("analytics_platform", "ANALYTICS_PROFILE"),
     "support_records": ("support_platform", "SUPPORT_MESSAGE"),
     "support_conversations": ("support_platform", "SUPPORT_MESSAGE"),
     "customer_exports": ("export_service", "USER_EXPORT"),
