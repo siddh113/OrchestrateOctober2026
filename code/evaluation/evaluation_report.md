@@ -4,124 +4,199 @@
 
 Evaluated against `dataset/sample_output.csv` (32 public cases).
 
+Run command: `python -I code/evaluation/main.py` from repo root.
+
 | Metric | Score |
 |---|---|
 | Deletion-status accuracy | **32/32 (100%)** |
-| Exact step-sequence match | **10/32 (31%)** |
-| Overall field accuracy | **81.1%** |
+| Exact step-sequence match | **15/32 (46.9%)** |
+| Overall field accuracy | **90.0%** |
 
 All 32 sample cases produce the correct `deletion_status`
 (`COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`).
 
 ## 2. Step-Level and Field-Level Accuracy
 
-Steps were compared position-by-position up to `min(expected_length, actual_length)`.
+Steps compared position-by-position up to `min(expected_length, actual_length)`.
 
 | Field | Correct | Total compared | Accuracy |
 |---|---|---|---|
-| `phase` | 157 | 169 | 92.9% |
-| `system_id` | 130 | 169 | 76.9% |
-| `resource_id` | 120 | 169 | 71.0% |
-| `operation` | 125 | 169 | 74.0% |
-| `state` | 130 | 169 | 76.9% |
-| `evidence_id` | 160 | 169 | 94.7% |
-| **Overall** | **822** | **1014** | **81.1%** |
+| `phase` | 175 | 181 | 96.7% |
+| `system_id` | 160 | 181 | 88.4% |
+| `resource_id` | 148 | 181 | 81.8% |
+| `operation` | 159 | 181 | 87.8% |
+| `state` | 160 | 181 | 88.4% |
+| `evidence_id` | 175 | 181 | 96.7% |
+| **Overall** | **977** | **1086** | **90.0%** |
 
 Expected total steps across 32 cases: **193**  
-Generated total steps: **170** (missing 23 steps across 22 cases)
+Generated total steps: **181** (missing 12 steps across 17 cases)
 
 ## 3. Sequence Accuracy
 
-10 of 32 cases match the expected step sequence exactly (step order, all fields).  
-The 22 cases with discrepancies fall into these categories:
+15 of 32 cases match the expected step sequence exactly (step order, all fields).  
+The 17 cases with discrepancies fall into these categories:
 
 | Category | Cases affected |
 |---|---|
-| Missing analytics ANONYMIZED step (null-PII analytics record not linked to user) | 7 |
-| Wrong account resource_id (synthetic `account_NNN` vs real ID from evidence) | 6 |
-| Missing search index entry (search evidence not indexed for user) | 4 |
-| Missing support record (support evidence not linked to user) | 4 |
-| Wrong analytics data_category (ANONYMIZE vs DELETE) | 1 |
+| Missing analytics ANONYMIZED step (null-PII analytics, batch heuristic partial) | 5 |
+| Wrong account resource_id (naming-convention fallback, no evidence link) | 8 |
+| Missing search index entry (search evidence not matched to user) | 4 |
+| Missing support record (support evidence not linked to user by identifier) | 4 |
+| Wrong analytics data_category (case_12: ANONYMIZE vs DELETE) | 1 |
 
 ## 4. Identified Failures and Root Causes
 
 ### 4.1 Analytics ANONYMIZED Records Not Linked to Users
 
-**Affected cases:** case_03, case_04, case_21, case_25, case_26, case_27, case_28  
-**Root cause:** Some analytics records (e.g., `analytics_9406`, `analytics_1895`) have all PII fields set to `NULL` in the evidence. These records cannot be matched to a specific user through identifier-based matching because there are no email/phone/user_id fields. The expected output assigns these null-PII records to specific users, suggesting a contextual or temporal assignment mechanism not available from evidence alone.  
-**Impact:** COMPLETE cases missing 1 VERIFY_RECORD_ANONYMIZED step; INCOMPLETE cases missing the corresponding FINDING + REMEDIATION + VERIFICATION triple.
+**Affected cases:** case_03, case_04, case_27, case_28  
+**Root cause:** After anonymization, analytics records have all PII fields set to NULL. Identity-based
+matching finds nothing. A batch co-location heuristic links these to users via `system_activity.csv`:
+consecutive `DELETE_RECORD` account events are matched LIFO to the `ANONYMIZE_RECORD` analytics events
+that follow in the global activity stream. This works for cases 26 and some others but fails when the
+LIFO pairing order does not align with the actual user-to-record assignment (case_27 gets
+analytics_6077 instead of analytics_4574; case_03 and case_04 have no evidence-based mapping).
 
 ### 4.2 Wrong Account Service Resource IDs
 
-**Affected cases:** case_18, case_20, case_21, case_22, case_23, case_25, case_28, case_29, case_30, case_31, case_32  
-**Root cause:** When no explicit account evidence maps a `user_NNN` to a real account ID, the pipeline falls back to a naming-convention derivation (`user_NNN` → `account_NNN` zero-padded). This is correct for early users (user_01–user_10) but wrong for users with arbitrary account IDs (e.g., user_050 → expected account_5037, got account_050). Cases 24, 26, 27 were fixed by implementing snapshot bundle `customer_reference` lookups and SQL `source_resource_id` lookups. Remaining 11 cases have no participant-visible evidence linking user_id to account_id.  
-**Impact:** VERIFY_RECORD_ABSENT (or FINDING) step cites wrong resource_id and wrong evidence_id.
+**Affected cases:** case_03, case_09, case_17, case_18, case_21, case_22, case_23, case_25, case_28,
+case_29, case_30, case_31, case_32  
+**Root cause:** When no participant-visible evidence links a `user_NNN` to an actual account_service
+resource ID, the pipeline falls back to a naming convention: `user_NNN → account_NNN` (zero-padded
+to three digits). This is correct for users 01–09 but wrong for users with arbitrary IDs (e.g.,
+user_050 → expected account_5037, not account_050). Evidence-based lookups (snapshot bundle
+`customer_reference`, SQL search `source_resource_id`, trace-log `profile_lookup_completed` pairing)
+resolve some cases but not all.
 
 ### 4.3 Missing Search Index Entries
 
 **Affected cases:** case_19, case_22, case_24  
-**Root cause:** Search index evidence for certain users does not include any email, user_id, or email_hash field that matches the user identity. Evidence is present but matching fails.  
-**Impact:** Missing FINDING + REMEDIATION + VERIFICATION triple for `search_service`.
+**Root cause:** Search index evidence for certain users does not include an email, user_id, or
+email_hash field that matches the user identity as seen by the identity matcher. Evidence is present
+but not connected.
 
 ### 4.4 Missing Support Records
 
-**Affected cases:** case_11, case_16, case_29, case_30  
-**Root cause:** Support message or attachment evidence exists but is associated via a support ticket ID rather than directly via email/phone, causing the identity matcher to skip it.  
-**Impact:** Missing 1–3 steps in the FINDING/REMEDIATION/VERIFICATION phases.
+**Affected cases:** case_11, case_19, case_29, case_30  
+**Root cause:** Support message or attachment evidence is associated via support ticket ID rather than
+directly via email or phone, so the identity matcher does not link it to the user.
 
 ### 4.5 Wrong Analytics Data Category (case_12)
 
 **Affected case:** case_12 (`analytics_9914`)  
-**Root cause:** The pipeline classifies this analytics record as `ANALYTICS_PROFILE` (requiring ANONYMIZE), but the expected output applies a DELETE action (`REPORT_REMAINING_RECORD` + `DELETE_RECORD`), indicating the record should be treated as a different data category.  
-**Impact:** 3 steps have wrong operation/state values.
+**Root cause:** The event_meta dict maps `contact_lookup_completed` log events to `MARKETING_PROFILE`
+(DELETE policy). However, analytics_9914's authoritative state record comes from a SQL
+`customer_analytics_profiles` table (not a log event), so the table→system mapping applies and the
+record is classified as `ANALYTICS_PROFILE` (ANONYMIZE policy) instead. The expected output uses
+DELETE, indicating this record should be treated as a marketing contact record.
 
 ## 5. Improvements Made During Development
 
-1. **PDF parsing fixed:** Added `pypdf` extraction before LLM fallback. Stale empty LLM caches for 5 evidence files were deleted. This recovered evidence_58 (support attachment), which fixed case_07 deletion_status from COMPLETE → INCOMPLETE.
+1. **PDF parsing fixed:** Added `pypdf` extraction before LLM fallback. Stale empty LLM caches for
+   5 evidence files were deleted. This recovered evidence_58 (support attachment), which fixed case_07
+   deletion_status from COMPLETE → INCOMPLETE.
 
-2. **SUPPORT_ATTACHMENT vs SUPPORT_MESSAGE detection:** Added filename-based detection (`"attachment"` in stem). Attachment files require DELETE; message files require REDACT. This further improved case_07 step accuracy.
+2. **SUPPORT_ATTACHMENT vs SUPPORT_MESSAGE detection:** Added filename-based detection
+   (`"attachment"` in stem). Attachment files require DELETE; message files require REDACT. Further
+   improved case_07 step accuracy.
 
-3. **Ghost data detection:** SQL files with both a primary and failover-replica table correctly identify records present in the replica but absent from the primary as PRESENT (ghost state). This correctly handles case_05 and similar.
+3. **Ghost data detection:** SQL files with both a primary and failover-replica table correctly
+   identify records present in the replica but absent from the primary as PRESENT (ghost state).
+   Correctly handles case_05 and similar.
 
-4. **Account ID lookup tables:** Implemented three evidence-based lookup rules for account_service resource IDs: (1) snapshot bundle `customer_reference` field links user_id to account_id without time restriction; (2) SQL search table `source_resource_id` column links email to account_id; (3) trace log `profile_lookup_completed` events pair email with account_id. A naming-convention fallback (`user_NNN` → `account_NNN`) is used only when no data rule matches, with a code comment explaining its limitations. This improved resource_id accuracy from 66.9% to 71.0% (+4.1pp) and overall field accuracy from 78.8% to 81.1% (+2.3pp).
+4. **Account ID lookup tables:** Implemented three evidence-based lookup rules:
+   (1) snapshot bundle `customer_reference` links user_id to account_id;
+   (2) SQL search table `source_resource_id` links email to account_id;
+   (3) trace log `profile_lookup_completed` events pair email with account_id via trace_id.
+   Naming-convention fallback (`user_NNN → account_NNN`) used only when no data rule matches.
+   Improved resource_id accuracy from ~71% to 81.8%.
 
-5. **audit_at strict cutoff:** Evidence files captured after `audit_at` are excluded from state reconstruction. This prevents future evidence from changing the verdict for a given case.
+5. **`audit_at` strict cutoff:** Evidence files captured after `audit_at` are excluded from Phase 1
+   state reconstruction. Late files are used only to discover resource identity (Phase 2), never as
+   citable evidence.
+
+6. **Batch co-location heuristic:** Added `_build_batch_analytics_map` in `evidence_indexer.py` that
+   parses `system_activity.csv` to find consecutive `DELETE_RECORD` account batches followed by
+   `ANONYMIZE_RECORD` analytics events. LIFO pairing links the last-deleted account's analytics first.
+   Improved analytics ANONYMIZED coverage for cases 26 and 27 (partial).
+
+7. **Empty evidence_id violation filter:** Violations with no on-time evidence citation
+   (`evidence_file_id == ""`) are excluded from the INCOMPLETE findings. This fixed case_70, which
+   had a false PRESENT finding based on a stale late-file record while the Sep 16 audit showed
+   deletion complete.
 
 ## 6. Additional Evaluation Cases
 
-The following three cases were constructed to test edge conditions not covered by the 32 public samples.
+Three custom cases test edge conditions not covered by the 32 public samples.
+Run via `python -I code/evaluation/custom_cases.py`. Result: **3/3 PASS**.
 
-### Custom Case A — Tombstone with PII Exposed
+---
 
-**Scenario:** A user's account was tombstoned (stable `user_id` retained in `identity_service`), but the tombstone record still contains the user's name and email. The deletion request is valid. The account is absent from `account_service`.
+### Custom Case A — Non-Deletion Request (NOT_APPLICABLE)
 
-**Expected output:** `INCOMPLETE`
+**Subject:** `o.walker66@yahoo.com` (user_523)  
+**Request text:** `"I would like to receive a copy of all personal data you hold about me in a portable format."`  
+**audit_at:** 2026-10-01T12:00:00Z
+
+**Rationale:** Contains `copy`, `portable format`, `data` — NOT_APPLICABLE keywords. No deletion
+language. Intent classifier fast-path must return NOT_APPLICABLE without an LLM call.
+
+**Expected:** `NOT_APPLICABLE`, `steps_json=[]`
+
+**Actual output:**
+
+| Field | Value |
+|---|---|
+| `deletion_status` | `NOT_APPLICABLE` |
+| `steps_json` | `[]` |
+| Fast-path hit | Yes (no LLM call) |
+
+**Result: PASS** — Fast-path correctly short-circuits. No evidence lookup performed.
+
+---
+
+### Custom Case B — Historical-Email-Only Resolution
+
+**Subject:** `o.walker6695@yahoo.com` — old email of user_523 (current: `o.walker66@yahoo.com`)  
+**Request text:** `"Please delete my account and all associated personal data immediately."`  
+**audit_at:** 2026-10-01T12:00:00Z
+
+**Rationale:** Email in request no longer exists as current identity. `identity_resolver` must find
+user_523 via `user_audit_log` `old_value` lookup and produce identical state to current-email run.
+
+**Actual output:** `INCOMPLETE`, user_id=user_523 resolved. Steps identical to current-email run.
 
 Steps:
-1. FINDING — `REPORT_EXPOSED_PII` on `identity_service/tombstone_XXX` (PRESENT)
-2. REMEDIATION — `REDACT_RECORD` on `identity_service/tombstone_XXX` (REDACTED)
-3. VERIFICATION — `VERIFY_RECORD_ABSENT` on `account_service/account_XXX` (ABSENT)
-4. VERIFICATION — `VERIFY_RECORD_REDACTED` on `identity_service/tombstone_XXX` (REDACTED)
 
-**Pipeline behavior:** Correctly handles tombstone REDACT policy. Fails only if identity_service evidence PII is not extracted.
+| # | Phase | system_id | resource_id | operation | state | evidence_id |
+|---|---|---|---|---|---|---|
+| 1 | FINDING | account_service | account_4974 | REPORT_REMAINING_RECORD | PRESENT | evidence_49 |
+| 2 | REMEDIATION | account_service | account_4974 | DELETE_RECORD | ABSENT | `` |
+| 3 | VERIFICATION | account_service | account_4974 | VERIFY_RECORD_ABSENT | ABSENT | `` |
+| 4 | VERIFICATION | security_service | audit_record_3803 | VERIFY_RECORD_PRESENT | PRESENT | `` |
 
-### Custom Case B — NOT_APPLICABLE (Data Access Request)
+**Result: PASS** — Historical-email resolution works correctly via `user_audit_log`.
 
-**Scenario:** Request text reads: "I would like to access all personal data you hold about me." No deletion language present.
+---
 
-**Expected output:** `NOT_APPLICABLE`, `steps_json=[]`
+### Custom Case C — COMPLETE: Restore Risk Blocked, Data Flow Disabled
 
-**Pipeline behavior:** Intent classifier keyword fast-path returns `NOT_APPLICABLE` on "access" without contacting LLM.
+**Subject:** `lucas-souza95@gmail.com` (user_39)  
+**Request text:** `"Please erase the account linked to this email address."`  
+**audit_at:** 2026-10-01T12:00:00Z
 
-### Custom Case C — COMPLETE with Security Audit Retained
+**Rationale:** At audit_at: account absent, backup BLOCKED, data flow DISABLED, support REDACTED,
+security audit PRESENT. Zero violations → COMPLETE. Both `VERIFY_RESTORE_BLOCKED` and
+`VERIFY_DATA_FLOW_DISABLED` must appear.
 
-**Scenario:** User's account is deleted (ABSENT in account_service), all analytics anonymized, but a security audit log entry remains present (policy=RETAIN).
+**Actual output:** `COMPLETE`, 5 VERIFICATION steps.
 
-**Expected output:** `COMPLETE`
+| # | Phase | system_id | resource_id | operation | state | evidence_id |
+|---|---|---|---|---|---|---|
+| 1 | VERIFICATION | account_service | account_4051 | VERIFY_RECORD_ABSENT | ABSENT | evidence_03 |
+| 2 | VERIFICATION | security_service | audit_record_7814 | VERIFY_RECORD_PRESENT | PRESENT | evidence_03 |
+| 3 | VERIFICATION | support_platform | support_2667 | VERIFY_RECORD_REDACTED | REDACTED | evidence_03 |
+| 4 | VERIFICATION | integration_service | data_flow_2901 | VERIFY_DATA_FLOW_DISABLED | DISABLED | evidence_03 |
+| 5 | VERIFICATION | backup_service | backup_706 | VERIFY_RESTORE_BLOCKED | BLOCKED | evidence_03 |
 
-Steps:
-1. VERIFICATION — `VERIFY_RECORD_ABSENT` on `account_service/account_XXX`
-2. VERIFICATION — `VERIFY_RECORD_PRESENT` on `security_service/audit_record_XXX`
-3. VERIFICATION — `VERIFY_RECORD_ANONYMIZED` on `analytics_platform/analytics_XXX`
-
-**Pipeline behavior:** Security audit records are always flagged as RETAIN; never as violations. COMPLETE path includes VERIFY_RECORD_PRESENT for all retained security records.
+**Result: PASS** — COMPLETE path emits all required verification ops with real evidence citations.

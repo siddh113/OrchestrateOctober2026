@@ -116,8 +116,9 @@ class StateReconstructor:
                 ))
                 continue
 
-            # Otherwise: pick latest captured_at, tie-break by source priority
-            entries.sort(key=lambda e: (e[0], e[1]), reverse=True)
+            # Prefer on-time emit_file_id (non-empty) over late-file entry (empty).
+            # Within same has-evidence tier: latest captured_at, then source priority.
+            entries.sort(key=lambda e: (0 if e[2] == "" else 1, e[0], e[1]), reverse=True)
             _, _, file_id, rec = entries[0]
 
             result.append(ResourceState(

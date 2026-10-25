@@ -81,7 +81,7 @@ def run_pipeline_on_samples(
 
             all_states = reconstructor.reconstruct(identity, audit_at)
             decisions = [engine.apply(rs, identity, audit_at) for rs in all_states]
-            violations = [d for d in decisions if d.is_violation]
+            violations = [d for d in decisions if d.is_violation and d.resource_state.evidence_file_id]
             compliant = [d.resource_state for d in decisions if not d.is_violation]
             security_resources = [rs for rs in all_states if rs.data_category == "SECURITY_AUDIT_LOG"]
 

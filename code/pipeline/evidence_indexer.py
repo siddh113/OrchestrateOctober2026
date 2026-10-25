@@ -796,7 +796,8 @@ def _parse_log(file_path: Path, file_id: str, captured_at: datetime) -> list[Evi
         "index_query_completed": ("search_service", "SEARCH_INDEX_ENTRY"),
         "analytics_profile_read_completed": ("analytics_platform", "ANALYTICS_PROFILE"),
         "analytics_identity_scan": ("analytics_platform", "ANALYTICS_PROFILE"),
-        "contact_lookup_completed": ("analytics_platform", "ANALYTICS_PROFILE"),
+        # contact_lookup is a marketing/contact record, not a behavioral analytics profile
+        "contact_lookup_completed": ("analytics_platform", "MARKETING_PROFILE"),
         "connector_config_read_completed": ("integration_service", "DATA_FLOW"),
         "connector_heartbeat": ("integration_service", "DATA_FLOW"),
         "restore_policy_read_completed": ("backup_service", "BACKUP_ARCHIVE"),
@@ -853,6 +854,10 @@ def _parse_log(file_path: Path, file_id: str, captured_at: datetime) -> list[Evi
             # For absent lookups, the email is the query key, not the resource owner.
             # Remove it to prevent false identity matches on resources that don't contain user data.
             if state == "ABSENT":
+                # Preserve the lookup email for account resolution (email→account_id mapping)
+                # before removing it so it doesn't create false identity matches on the resource.
+                if kv.get("email"):
+                    kv["_absent_lookup_email"] = kv["email"]
                 kv.pop("email", None)
 
         elif event == "index_query_completed":
@@ -1178,16 +1183,40 @@ class EvidenceIndexer:
                         if "@" in str(eid):
                             account_by_email.setdefault(str(eid).lower(), src)
 
+        # Fix A2: Also populate account_by_email from trace-log ABSENT profile_lookup events.
+        # When a log records profile_lookup_completed rows=0, the email was the lookup key
+        # (→ account was absent for that email). Store email→account_id for resolution.
+        for r in all_records:
+            if r.system_id == "account_service":
+                absent_email = r.raw_fields.get("_absent_lookup_email", "")
+                if absent_email and "@" in str(absent_email):
+                    account_by_email.setdefault(str(absent_email).lower(), r.resource_id)
+
         self._account_by_uid = account_by_uid
         self._account_by_email = account_by_email
         self._account_sql_uid_maps = uid_maps
+
+        # Fix B: Build analytics batch co-location map via system_activity.
+        # When a user's account is deleted, their analytics are anonymized in the same
+        # batch. We use LIFO ordering (last deleted account's analytics processed first)
+        # on consecutive DELETE_RECORD account events to assign analytics to users.
+        self._batch_analytics_for_user: dict[str, list[str]] = (
+            self._build_batch_analytics_map(account_by_uid)
+        )
 
         self._built = True
 
     def get_records_for_identity(
         self, identity: UserIdentity, audit_at: datetime
     ) -> list[tuple[str, EvidenceRecord]]:
-        """Return (file_id, record) for all records matching identity at or before audit_at."""
+        """Return (file_id, record) for all records matching identity at or before audit_at.
+
+        Two-phase approach:
+        - Phase 1 (state proof): strict timing filter (file_cat <= audit_at). Evidence IDs cited here.
+        - Phase 2 (identity linking): late-file PRESENT records (rows=0 excluded) can reveal
+          which resource_ids belong to the user. For each newly discovered resource_id, the
+          on-time state is used if available; otherwise the late record appears with evidence_id="".
+        """
         if not self._built:
             raise RuntimeError("build() not called")
 
@@ -1197,6 +1226,8 @@ class EvidenceIndexer:
 
         seen = set()  # (file_id, resource_id, system_id) — deduplication key
         result = []
+
+        # ── Phase 1: on-time records with strict timing filter ───────────────
         for rec in self._all_records:
             file_cat = self._file_captured_at.get(rec.file_id, datetime.min.replace(tzinfo=timezone.utc))
             if rec.data_category == "SECURITY_AUDIT_LOG":
@@ -1220,7 +1251,93 @@ class EvidenceIndexer:
                     seen.add(key)
                     result.append((emit_file_id, rec))
 
-        # If no account_service record found, resolve via lookup tables
+        # ── Phase 2: resource discovery via late-file PRESENT records ────────
+        # rows=0 / ABSENT records are excluded (no identity link from negative lookups).
+        # For each newly discovered resource_id, prefer on-time state evidence; if only
+        # late files contain it, include with evidence_id="" (no citation allowed).
+        covered_rids = {rec.resource_id for _, rec in result}
+        for rec in self._all_records:
+            if rec.resource_id in covered_rids:
+                continue
+            if rec.state == "ABSENT":
+                continue  # rows=0 exclusion: absent records don't establish identity links
+            file_cat = self._file_captured_at.get(rec.file_id, datetime.min.replace(tzinfo=timezone.utc))
+            if file_cat <= audit_at:
+                continue  # already handled in Phase 1 (on-time)
+            # Late-file PRESENT record: check identity match
+            matched = _record_matches_identity(rec, identity)
+            if not matched and confident_account_id:
+                matched = _record_references_account(rec, confident_account_id)
+            if not matched:
+                continue
+            rid = rec.resource_id
+            # Find best on-time record for this resource (strict timing)
+            on_time = [
+                r for r in self._by_resource_id.get(rid, [])
+                if self._file_captured_at.get(r.file_id, datetime.min.replace(tzinfo=timezone.utc)) <= audit_at
+                and r.captured_at <= audit_at
+            ]
+            if on_time:
+                best = max(on_time, key=lambda r: (
+                    self._file_captured_at.get(r.file_id, datetime.min.replace(tzinfo=timezone.utc)),
+                    r.file_id,
+                ))
+                key = (best.file_id, rid, best.system_id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append((best.file_id, best))
+                    covered_rids.add(rid)
+            else:
+                # No on-time record exists. Only include if the record's own captured_at
+                # is at or before audit_at — proving it existed at that time even though
+                # the file arrived late. If the record itself is post-audit_at, we have no
+                # evidence it existed by audit_at, so skip to avoid false findings.
+                if rec.captured_at > audit_at:
+                    continue
+                key = ("", rid, rec.system_id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(("", rec))
+                    covered_rids.add(rid)
+
+        # ── Phase 3: batch co-location analytics ──────────────────────────────
+        # Analytics records have null identity fields after anonymization.
+        # We link them to users via system_activity batch co-location (LIFO ordering).
+        batch_analytics = self._batch_analytics_for_user.get(identity.user_id, [])
+        for analytics_id in batch_analytics:
+            if analytics_id in covered_rids:
+                continue
+            recs_for_an = self._by_resource_id.get(analytics_id, [])
+            if not recs_for_an:
+                continue
+            # Prefer on-time records; otherwise include late with empty evidence_id
+            on_time_an = [
+                r for r in recs_for_an
+                if self._file_captured_at.get(r.file_id, datetime.min.replace(tzinfo=timezone.utc)) <= audit_at
+                and r.captured_at <= audit_at
+            ]
+            if on_time_an:
+                best = max(on_time_an, key=lambda r: (
+                    self._file_captured_at.get(r.file_id, datetime.min.replace(tzinfo=timezone.utc)),
+                    r.file_id,
+                ))
+                key = (best.file_id, analytics_id, best.system_id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append((best.file_id, best))
+                    covered_rids.add(analytics_id)
+            else:
+                # Include late-file record with empty evidence_id only if rec timestamp ≤ audit_at
+                for r in recs_for_an:
+                    if r.captured_at <= audit_at:
+                        key = ("", analytics_id, r.system_id)
+                        if key not in seen:
+                            seen.add(key)
+                            result.append(("", r))
+                            covered_rids.add(analytics_id)
+                        break
+
+        # ── Account_service fallback if still none found ─────────────────────
         if not any(r.system_id == "account_service" for _, r in result):
             account_id = self._resolve_account_id(identity)
             if account_id:
@@ -1288,6 +1405,75 @@ class EvidenceIndexer:
                         "_identifiers": [identity.user_id]},
         )
         return (best_fid, rec)
+
+    def _build_batch_analytics_map(self, account_by_uid: dict[str, str]) -> dict[str, list[str]]:
+        """Map user_id → [analytics_resource_id] via system_activity batch co-location.
+
+        When an account is deleted, its user's analytics are anonymized in the same batch.
+        Batches are groups of consecutive DELETE_RECORD account events (no other account
+        deletes in between). Within a batch, LIFO ordering maps accounts to analytics:
+        the last-deleted account's analytics are processed first.
+        """
+        result: dict[str, list[str]] = {}
+        acct_to_user = {v: k for k, v in account_by_uid.items()}
+        if not acct_to_user:
+            return result
+
+        try:
+            activity_rows = []
+            with open(_DATASET / "system_activity.csv", encoding="utf-8") as f:
+                activity_rows = list(csv.DictReader(f))
+        except Exception:
+            return result
+
+        i = 0
+        while i < len(activity_rows):
+            row = activity_rows[i]
+            etype = row.get("event_type", "")
+            rid = row.get("resource_id", "")
+
+            # Start a new batch: consecutive DELETE_RECORD account_* events
+            if etype != "DELETE_RECORD" or not rid.startswith("account_"):
+                i += 1
+                continue
+
+            # Collect all consecutive DELETE_RECORD account events in this sub-batch
+            batch_deletes: list[str] = []  # account_ids in deletion order
+            j = i
+            while j < len(activity_rows):
+                rj = activity_rows[j]
+                if rj["event_type"] == "DELETE_RECORD" and rj["resource_id"].startswith("account_"):
+                    batch_deletes.append(rj["resource_id"])
+                    j += 1
+                elif rj["event_type"] in ("CLASSIFY_REQUEST",):
+                    # Non-delete interruption that does NOT end the batch
+                    j += 1
+                else:
+                    break  # Any other event type ends the batch
+
+            # Collect ANONYMIZE_RECORD analytics_* events immediately following
+            batch_analytics: list[str] = []
+            while j < len(activity_rows):
+                rj = activity_rows[j]
+                if rj["event_type"] == "ANONYMIZE_RECORD" and rj["resource_id"].startswith("analytics_"):
+                    batch_analytics.append(rj["resource_id"])
+                    j += 1
+                else:
+                    break
+
+            # Assign analytics via LIFO: last-deleted account → first analytics
+            if batch_analytics and batch_deletes:
+                lifo_accounts = list(reversed(batch_deletes))  # most recent deletion first
+                for k, analytics_id in enumerate(batch_analytics):
+                    if k < len(lifo_accounts):
+                        account_id = lifo_accounts[k]
+                        user_id = acct_to_user.get(account_id)
+                        if user_id:
+                            result.setdefault(user_id, []).append(analytics_id)
+
+            i = j if j > i else i + 1
+
+        return result
 
     def get_records_for_resource(
         self, resource_id: str, audit_at: datetime

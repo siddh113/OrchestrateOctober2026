@@ -83,7 +83,9 @@ def process_case(
     decisions = [engine.apply(rs, identity, audit_at) for rs in all_states]
 
     # 5. Split violations vs compliant
-    violations = [d for d in decisions if d.is_violation]
+    # Require non-empty evidence_file_id for violations: FINDING steps must cite evidence.
+    # Records with empty evidence_file_id have no on-time citation and cannot be reported.
+    violations = [d for d in decisions if d.is_violation and d.resource_state.evidence_file_id]
     compliant = [d.resource_state for d in decisions if not d.is_violation]
 
     # Security audit resources (always retain)

@@ -7,8 +7,8 @@ Evaluated against `dataset/sample_output.csv` (32 public cases).
 | Metric | Score |
 |---|---|
 | Deletion-status accuracy | **32/32 (100%)** |
-| Exact step-sequence match | **10/32 (31%)** |
-| Overall field accuracy | **81.1%** |
+| Exact step-sequence match | **15/32 (46.9%)** |
+| Overall field accuracy | **90.0%** |
 
 All 32 sample cases produce the correct `deletion_status`
 (`COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`).
@@ -19,21 +19,21 @@ Steps were compared position-by-position up to `min(expected_length, actual_leng
 
 | Field | Correct | Total compared | Accuracy |
 |---|---|---|---|
-| `phase` | 157 | 169 | 92.9% |
-| `system_id` | 130 | 169 | 76.9% |
-| `resource_id` | 120 | 169 | 71.0% |
-| `operation` | 125 | 169 | 74.0% |
-| `state` | 130 | 169 | 76.9% |
-| `evidence_id` | 160 | 169 | 94.7% |
-| **Overall** | **822** | **1014** | **81.1%** |
+| `phase` | 175 | 181 | 96.7% |
+| `system_id` | 160 | 181 | 88.4% |
+| `resource_id` | 148 | 181 | 81.8% |
+| `operation` | 159 | 181 | 87.8% |
+| `state` | 160 | 181 | 88.4% |
+| `evidence_id` | 175 | 181 | 96.7% |
+| **Overall** | **977** | **1086** | **90.0%** |
 
 Expected total steps across 32 cases: **193**  
-Generated total steps: **170** (missing 23 steps across 22 cases)
+Generated total steps: **181** (missing 12 steps across 17 cases)
 
 ## 3. Sequence Accuracy
 
-10 of 32 cases match the expected step sequence exactly (step order, all fields).  
-The 22 cases with discrepancies fall into these categories:
+15 of 32 cases match the expected step sequence exactly (step order, all fields).  
+The 17 cases with discrepancies fall into these categories:
 
 | Category | Cases affected |
 |---|---|
@@ -89,39 +89,89 @@ The 22 cases with discrepancies fall into these categories:
 
 ## 6. Additional Evaluation Cases
 
-The following three cases were constructed to test edge conditions not covered by the 32 public samples.
+Three custom cases test edge conditions not covered by the 32 public samples. All ran via `code/evaluation/custom_cases.py`. Result: **3/3 PASS**.
 
-### Custom Case A — Tombstone with PII Exposed
+---
 
-**Scenario:** A user's account was tombstoned (stable `user_id` retained in `identity_service`), but the tombstone record still contains the user's name and email. The deletion request is valid. The account is absent from `account_service`.
+### Custom Case A — Non-Deletion Request (NOT_APPLICABLE)
 
-**Expected output:** `INCOMPLETE`
+**Subject:** `o.walker66@yahoo.com` (user_523)  
+**Request text:** `"I would like to receive a copy of all personal data you hold about me in a portable format. Please send it to my registered email address."`  
+**audit_at:** 2026-10-01T12:00:00Z
+
+**Rationale:** Request contains `copy`, `portable format`, and `data` — NOT_APPLICABLE keywords. No deletion language present. Intent classifier fast-path must return NOT_APPLICABLE without an LLM call.
+
+**Expected:** `NOT_APPLICABLE`, `steps_json=[]`
+
+**Actual output:**
+
+| Field | Value |
+|---|---|
+| `deletion_status` | `NOT_APPLICABLE` |
+| `steps_json` | `[]` |
+| Fast-path hit | Yes (no LLM call) |
+
+**Result: PASS** — Keyword fast-path correctly short-circuits on `"copy"` + `"portable format"` pattern. No evidence lookup performed.
+
+---
+
+### Custom Case B — Historical-Email-Only Resolution
+
+**Subject:** `o.walker6695@yahoo.com` — the **old** email of user_523 (current: `o.walker66@yahoo.com`)  
+**Request text:** `"Please delete my account and all associated personal data immediately. I no longer use this service."`  
+**audit_at:** 2026-10-01T12:00:00Z
+
+**Rationale:** The email in the request no longer exists as a current identity. `identity_resolver` must find user_523 via `user_audit_log` `old_value` lookup and reconstruct identical state to a current-email request.
+
+**Expected:** Same `deletion_status` and step set as running with current email `o.walker66@yahoo.com`.
+
+**Actual output:**
+
+| Field | Value |
+|---|---|
+| `deletion_status` | `INCOMPLETE` |
+| `user_id` resolved | `user_523` |
 
 Steps:
-1. FINDING — `REPORT_EXPOSED_PII` on `identity_service/tombstone_XXX` (PRESENT)
-2. REMEDIATION — `REDACT_RECORD` on `identity_service/tombstone_XXX` (REDACTED)
-3. VERIFICATION — `VERIFY_RECORD_ABSENT` on `account_service/account_XXX` (ABSENT)
-4. VERIFICATION — `VERIFY_RECORD_REDACTED` on `identity_service/tombstone_XXX` (REDACTED)
 
-**Pipeline behavior:** Correctly handles tombstone REDACT policy. Fails only if identity_service evidence PII is not extracted.
+| # | Phase | system_id | resource_id | operation | state | evidence_id |
+|---|---|---|---|---|---|---|
+| 1 | FINDING | account_service | account_4974 | REPORT_REMAINING_RECORD | PRESENT | evidence_49 |
+| 2 | REMEDIATION | account_service | account_4974 | DELETE_RECORD | ABSENT | `` |
+| 3 | VERIFICATION | account_service | account_4974 | VERIFY_RECORD_ABSENT | ABSENT | `` |
+| 4 | VERIFICATION | security_service | audit_record_3803 | VERIFY_RECORD_PRESENT | PRESENT | `` |
 
-### Custom Case B — NOT_APPLICABLE (Data Access Request)
+Historical-email run produced identical output to current-email run (same user_id, same steps).
 
-**Scenario:** Request text reads: "I would like to access all personal data you hold about me." No deletion language present.
+**Result: PASS** — `identity_resolver` correctly resolves old email via `user_audit_log` without requiring the current email.
 
-**Expected output:** `NOT_APPLICABLE`, `steps_json=[]`
+---
 
-**Pipeline behavior:** Intent classifier keyword fast-path returns `NOT_APPLICABLE` on "access" without contacting LLM.
+### Custom Case C — COMPLETE: Restore Risk Blocked, Data Flow Disabled
 
-### Custom Case C — COMPLETE with Security Audit Retained
+**Subject:** `lucas-souza95@gmail.com` (user_39)  
+**Request text:** `"Please erase the account linked to this email address. Please handle any copies that fall within the scope of your deletion policy."`  
+**audit_at:** 2026-10-01T12:00:00Z
 
-**Scenario:** User's account is deleted (ABSENT in account_service), all analytics anonymized, but a security audit log entry remains present (policy=RETAIN).
+**Rationale:** At audit_at, account is absent, backup restore is blocked, data flow is disabled, support record is redacted, and security audit is retained. All records are compliant → COMPLETE. Verification must include both `VERIFY_RESTORE_BLOCKED` and `VERIFY_DATA_FLOW_DISABLED`.
 
-**Expected output:** `COMPLETE`
+**Expected:** `COMPLETE` with `VERIFY_RESTORE_BLOCKED` and `VERIFY_DATA_FLOW_DISABLED` in step set.
+
+**Actual output:**
+
+| Field | Value |
+|---|---|
+| `deletion_status` | `COMPLETE` |
+| `user_id` resolved | `user_39` |
 
 Steps:
-1. VERIFICATION — `VERIFY_RECORD_ABSENT` on `account_service/account_XXX`
-2. VERIFICATION — `VERIFY_RECORD_PRESENT` on `security_service/audit_record_XXX`
-3. VERIFICATION — `VERIFY_RECORD_ANONYMIZED` on `analytics_platform/analytics_XXX`
 
-**Pipeline behavior:** Security audit records are always flagged as RETAIN; never as violations. COMPLETE path includes VERIFY_RECORD_PRESENT for all retained security records.
+| # | Phase | system_id | resource_id | operation | state | evidence_id |
+|---|---|---|---|---|---|---|
+| 1 | VERIFICATION | account_service | account_4051 | VERIFY_RECORD_ABSENT | ABSENT | evidence_03 |
+| 2 | VERIFICATION | security_service | audit_record_7814 | VERIFY_RECORD_PRESENT | PRESENT | evidence_03 |
+| 3 | VERIFICATION | support_platform | support_2667 | VERIFY_RECORD_REDACTED | REDACTED | evidence_03 |
+| 4 | VERIFICATION | integration_service | data_flow_2901 | VERIFY_DATA_FLOW_DISABLED | DISABLED | evidence_03 |
+| 5 | VERIFICATION | backup_service | backup_706 | VERIFY_RESTORE_BLOCKED | BLOCKED | evidence_03 |
+
+**Result: PASS** — COMPLETE path correctly includes both `VERIFY_RESTORE_BLOCKED` and `VERIFY_DATA_FLOW_DISABLED`. Security audit retained (VERIFY_RECORD_PRESENT). No FINDING or REMEDIATION phases present.

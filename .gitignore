@@ -31,5 +31,8 @@ Thumbs.db
 *.swp
 
 .claude/
+.evidence_cache/
+.llm_cache/
+.pytest_cache/
 
 # Do NOT ignore log.txt — required submission artifact
