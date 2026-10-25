@@ -628,3 +628,25 @@ branch=my-solution
 repo_root=C:\Users\Siddharth\Desktop\hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## 2026-10-25T01:40:27Z Fix support PII detection and message_pii_scan log event
+
+User Prompt (verbatim, secrets redacted):
+[Continued from compacted session] Investigate missing support records (cases 11, 19) and missing audit records (cases 18, 20, 24). Fix only if general parsing gap.
+
+Agent Response Summary:
+Confirmed audit_record_5569 and audit_record_6645 not in any evidence file - no fix needed. Found three general parsing gaps for support records: (1) _is_pii_exposed for SUPPORT_MESSAGE only checked requester_email/requester_phone, missing email and matched_value fields used by txt and log parsers; (2) message_pii_scan log event not in event_meta, causing support_9553 (case_19) to be silently skipped; (3) ticket_attachments collection missing from collection_meta in _parse_snapshot_bundle. Applied all three fixes. Sample accuracy: 32/32 status, field accuracy 90.0% to 95.7%, exact match 15 to 17. Rows changed in full 518-row output: 14 steps_json, 3 status.
+
+Actions:
+* code/pipeline/policy_engine.py: extended _is_pii_exposed for SUPPORT_MESSAGE to check email, matched_value
+* code/pipeline/evidence_indexer.py: added message_pii_scan to event_meta, state handler; added ticket_attachments and support_conversations to collection_meta in _parse_snapshot_bundle
+* output.csv: regenerated (14 rows changed steps_json, 3 changed status)
+* python3 -I code/evaluation/main.py: 32/32 status, 95.7% field, 17/32 exact
+
+Context:
+tool=Claude Code
+model=claude-sonnet-4-6
+branch=my-solution
+repo_root=C:\Users\Siddharth\Desktop\hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
